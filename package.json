@@ -36,7 +36,7 @@
     "workers": "rm -rf dist/workers && pnpm --filter ./apps/workers run dev",
     "cron": "rm -rf dist/cron && pnpm --filter ./apps/cron run dev",
     "prisma-generate": "pnpm exec prisma generate --schema ./libraries/nestjs-libraries/src/database/prisma/schema.prisma",
-    "prisma-db-push": "pnpx prisma db push --schema ./libraries/nestjs-libraries/src/database/prisma/schema.prisma",
+    "prisma-db-push": "pnpm exec prisma db push --schema ./libraries/nestjs-libraries/src/database/prisma/schema.prisma",
     "prisma-reset": "cd ./libraries/nestjs-libraries/src/database/prisma && pnpx prisma db push --force-reset && npx prisma db push",
     "docker-build": "./var/docker/docker-build.sh",
     "docker-create": "./var/docker/docker-create.sh",
