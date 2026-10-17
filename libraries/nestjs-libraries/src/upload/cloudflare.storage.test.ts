@@ -1,4 +1,5 @@
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import axios from 'axios';
 import { CloudflareStorage } from './cloudflare.storage';
 
 describe('CloudflareStorage', () => {
@@ -52,5 +53,22 @@ describe('CloudflareStorage', () => {
     jest.spyOn(S3Client.prototype, 'send').mockRejectedValue(error as never);
 
     await expect(createStorage().uploadFile(createFile('image/png'))).rejects.toBe(error);
+  });
+
+  it('preserves the content type when importing an image URL', async () => {
+    const data = Buffer.from('test image');
+    jest.spyOn(axios, 'get').mockResolvedValue({
+      data,
+      headers: { 'content-type': 'image/png' },
+    });
+    const send = jest.spyOn(S3Client.prototype, 'send').mockResolvedValue({} as never);
+
+    const url = await createStorage().uploadSimple('https://source.example.test/image.png');
+
+    const command = send.mock.calls[0][0] as PutObjectCommand;
+    expect(command.input.ContentType).toBe('image/png');
+    expect(command.input.Body).toBe(data);
+    expect(command.input).not.toHaveProperty('ACL');
+    expect(url).toBe(`https://media.example.test/${command.input.Key}`);
   });
 });
