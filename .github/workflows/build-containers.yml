@@ -8,7 +8,7 @@ permissions:
 on:
   push:
     tags:
-      - 'v1.47.0-linkedin-*'
+      - 'v1.47.0-*'
 
 jobs:
   build-container:
