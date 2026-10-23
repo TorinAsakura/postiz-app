@@ -11,6 +11,7 @@ import dayjs from 'dayjs';
 import { SocialAbstract } from '@gitroom/nestjs-libraries/integrations/social.abstract';
 import { InstagramDto } from '@gitroom/nestjs-libraries/dtos/posts/providers-settings/instagram.dto';
 import { Integration } from '@prisma/client';
+import { isMetaMediaFetchError } from '@gitroom/nestjs-libraries/integrations/meta-authentication-error';
 
 export class InstagramProvider
   extends SocialAbstract
@@ -29,6 +30,12 @@ export class InstagramProvider
     'instagram_manage_comments',
     'instagram_manage_insights',
   ];
+
+  protected override isTokenExpirationError(status: number, json: string) {
+    return (
+      !isMetaMediaFetchError(json) && super.isTokenExpirationError(status, json)
+    );
+  }
 
   async refreshToken(refresh_token: string): Promise<AuthTokenDetails> {
     return {

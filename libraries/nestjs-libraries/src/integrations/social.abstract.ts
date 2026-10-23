@@ -20,6 +20,18 @@ export class NotEnoughScopes {
 }
 
 export abstract class SocialAbstract {
+  protected isTokenExpirationError(status: number, json: string) {
+    return (
+      status === 401 ||
+      (json.includes('OAuthException') &&
+        !json.includes('The user is not an Instagram Business') &&
+        !json.includes('Unsupported format') &&
+        !json.includes('2207018') &&
+        !json.includes('352') &&
+        !json.includes('REVOKED_ACCESS_TOKEN'))
+    );
+  }
+
   async fetch(
     url: string,
     options: RequestInit = {},
@@ -45,15 +57,7 @@ export abstract class SocialAbstract {
       return this.fetch(url, options, identifier);
     }
 
-    if (
-      request.status === 401 ||
-      (json.includes('OAuthException') &&
-        !json.includes('The user is not an Instagram Business') &&
-        !json.includes('Unsupported format') &&
-        !json.includes('2207018') &&
-        !json.includes('352') &&
-        !json.includes('REVOKED_ACCESS_TOKEN'))
-    ) {
+    if (this.isTokenExpirationError(request.status, json)) {
       throw new RefreshToken(identifier, json, options.body!);
     }
 

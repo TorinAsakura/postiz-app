@@ -8,6 +8,7 @@ import {
 import { makeId } from '@gitroom/nestjs-libraries/services/make.is';
 import dayjs from 'dayjs';
 import { SocialAbstract } from '@gitroom/nestjs-libraries/integrations/social.abstract';
+import { isMetaMediaFetchError } from '@gitroom/nestjs-libraries/integrations/meta-authentication-error';
 
 export class FacebookProvider extends SocialAbstract implements SocialProvider {
   identifier = 'facebook';
@@ -21,6 +22,13 @@ export class FacebookProvider extends SocialAbstract implements SocialProvider {
     'pages_read_engagement',
     'read_insights',
   ];
+
+  protected override isTokenExpirationError(status: number, json: string) {
+    return (
+      !isMetaMediaFetchError(json) && super.isTokenExpirationError(status, json)
+    );
+  }
+
   async refreshToken(refresh_token: string): Promise<AuthTokenDetails> {
     return {
       refreshToken: '',
