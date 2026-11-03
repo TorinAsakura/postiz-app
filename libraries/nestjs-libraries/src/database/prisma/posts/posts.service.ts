@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PostsRepository } from '@gitroom/nestjs-libraries/database/prisma/posts/posts.repository';
 import { CreatePostDto } from '@gitroom/nestjs-libraries/dtos/posts/create.post.dto';
 import dayjs from 'dayjs';
@@ -209,6 +209,17 @@ export class PostsService {
     };
 
     return list;
+  }
+
+  async getPostForMcp(orgId: string, id: string, mutable = false) {
+    const post = await this._postRepository.getPostById(id, orgId);
+    if (!post || post.deletedAt || post.parentPostId) {
+      throw new NotFoundException('Root post not found');
+    }
+    if (mutable && (post.submittedForOrderId || !['DRAFT', 'QUEUE'].includes(post.state))) {
+      throw new BadRequestException('Only unsubmitted draft or queued root posts can be modified');
+    }
+    return { ...post, tags: await this._postRepository.getPostTags(orgId, id) };
   }
 
   async getOldPosts(orgId: string, date: string) {
