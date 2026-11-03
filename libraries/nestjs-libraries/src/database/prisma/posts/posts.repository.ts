@@ -26,6 +26,13 @@ export class PostsRepository {
     private _tagsPosts: PrismaRepository<'tagsPosts'>
   ) {}
 
+  getPostTags(orgId: string, id: string) {
+    return this._tagsPosts.model.tagsPosts.findMany({
+      where: { postId: id, post: { organizationId: orgId } },
+      select: { tag: { select: { id: true, name: true } } },
+    });
+  }
+
   getOldPosts(orgId: string, date: string) {
     return this._post.model.post.findMany({
       where: {
