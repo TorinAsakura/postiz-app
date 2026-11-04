@@ -3,64 +3,192 @@ name: "Build Containers"
 
 on:
   workflow_dispatch:
+    inputs:
+      source_revision:
+        description: Full source commit; empty uses the accepted production revision
+        required: false
+        default: ''
+        type: string
+      image_version:
+        description: Image version; empty uses the accepted version with a native suffix
+        required: false
+        default: ''
+        type: string
+      publish_latest:
+        description: Also advance the latest channel
+        required: false
+        default: false
+        type: boolean
   push:
     tags:
       - '*'
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/build-containers.yml
+
+permissions:
+  contents: read
+
+env:
+  ACCEPTED_SOURCE_REVISION: 1a1729078854840f69bf9bfdcadf378d0d742918
+  ACCEPTED_IMAGE_VERSION: v1.47.0-mcp-1
 
 jobs:
   build-containers-common:
     runs-on: ubuntu-latest
     outputs:
       containerver: ${{ steps.getcontainerver.outputs.containerver }}
+      source_revision: ${{ steps.getcontainerver.outputs.source_revision }}
+      image: ${{ steps.getcontainerver.outputs.image }}
+      publish_latest: ${{ steps.getcontainerver.outputs.publish_latest }}
     steps:
       - name: Get Container Version
         id: getcontainerver
+        env:
+          SOURCE_INPUT: ${{ inputs.source_revision }}
+          VERSION_INPUT: ${{ inputs.image_version }}
+          LATEST_INPUT: ${{ inputs.publish_latest }}
         run: |
-          echo "containerver=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            source_revision="$GITHUB_SHA"
+            version="$GITHUB_REF_NAME"
+            publish_latest=true
+          else
+            source_revision="${SOURCE_INPUT:-$ACCEPTED_SOURCE_REVISION}"
+            version="${VERSION_INPUT:-$ACCEPTED_IMAGE_VERSION-native}"
+            publish_latest="${LATEST_INPUT:-false}"
+          fi
+          {
+            echo "source_revision=$source_revision"
+            echo "containerver=$version"
+            echo "image=ghcr.io/${GITHUB_REPOSITORY,,}"
+            echo "publish_latest=$publish_latest"
+          } >> "$GITHUB_OUTPUT"
 
   build-containers:
     needs: build-containers-common
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
     strategy:
+      fail-fast: false
       matrix:
         include:
           - runnertags: ubuntu-latest
             arch: amd64
+            machine: x86_64
+            node_arch: x64
+            prisma_target: linux-musl-openssl-3.0.x
           - runnertags: ubuntu-24.04-arm
             arch: arm64
+            machine: aarch64
+            node_arch: arm64
+            prisma_target: linux-musl-arm64-openssl-3.0.x
     runs-on: ${{ matrix.runnertags }}
+    env:
+      IMAGE: ${{ needs.build-containers-common.outputs.image }}
+      CONTAINERVER: ${{ needs.build-containers-common.outputs.containerver }}
+      SOURCE_REVISION: ${{ needs.build-containers-common.outputs.source_revision }}
+      ARCH: ${{ matrix.arch }}
+      MACHINE: ${{ matrix.machine }}
+      NODE_ARCH: ${{ matrix.node_arch }}
+      PRISMA_TARGET: ${{ matrix.prisma_target }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          ref: ${{ env.SOURCE_REVISION }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require the exact source and native runner
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = "$MACHINE"
+          test "$(docker info --format '{{.Architecture}}')" = "$MACHINE"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Login to ghcr
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Build and Push Image
-        env:
-          CONTAINERVER: ${{ needs.build-containers-common.outputs.containerver }}
-          NEXT_PUBLIC_VERSION: ${{ github.ref_name }}
+      - name: Build the accepted source for the native platform
         run: |
-          docker buildx build --platform linux/${{ matrix.arch }} \
+          docker buildx build --platform "linux/$ARCH" \
             -f Dockerfile.dev \
-            -t ghcr.io/gitroomhq/postiz-app:${{ env.CONTAINERVER }}-${{ matrix.arch }} \
-            --build-arg NEXT_PUBLIC_VERSION=${{ env.NEXT_PUBLIC_VERSION }} \
+            -t "$IMAGE:$CONTAINERVER-$ARCH" \
+            --build-arg "NEXT_PUBLIC_VERSION=$CONTAINERVER" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$SOURCE_REVISION" \
+            --label "io.github.torinasakura.publisher-revision=$GITHUB_SHA" \
             --pull \
             --no-cache \
             --provenance=false --sbom=false \
-            --output "type=registry,name=ghcr.io/gitroomhq/postiz-app:${{ env.CONTAINERVER }}-${{ matrix.arch }}" .
+            --load .
+
+      - name: Validate native bindings without starting Postiz or its workers
+        run: |
+          test "$(docker image inspect "$IMAGE:$CONTAINERVER-$ARCH" --format '{{.Os}}/{{.Architecture}}')" = "linux/$ARCH"
+          docker run --rm --network none --cpus 2 --memory 1g \
+            -e "EXPECTED_NODE_ARCH=$NODE_ARCH" -e "EXPECTED_PRISMA_TARGET=$PRISMA_TARGET" \
+            --entrypoint node "$IMAGE:$CONTAINERVER-$ARCH" -e '
+          const assert = require("node:assert/strict");
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const { createRequire } = require("node:module");
+          assert.equal(process.platform, "linux");
+          assert.equal(process.arch, process.env.EXPECTED_NODE_ARCH);
+          require("bcrypt");
+          const sharp = require("sharp");
+          assert.ok(sharp.versions.vips);
+          const clientRequire = createRequire(require.resolve("@prisma/client"));
+          const generated = path.dirname(clientRequire.resolve(".prisma/client/default"));
+          const engine = require(path.join(generated, `libquery_engine-${process.env.EXPECTED_PRISMA_TARGET}.so.node`));
+          assert.equal(typeof engine.QueryEngine, "function");
+          for (const directory of ["apps/backend/dist", "apps/frontend/.next", "apps/workers/dist", "apps/cron/dist"]) {
+            assert.ok(fs.statSync(directory).isDirectory());
+          }
+          console.log(`Native ${process.arch} Node, bcrypt, Sharp, Prisma and compiled application artifacts passed`);
+          '
+
+      - name: Publish the exact tested image
+        if: github.event_name != 'pull_request'
+        run: |
+          docker push "$IMAGE:$CONTAINERVER-$ARCH"
+          digest=$(docker image inspect "$IMAGE:$CONTAINERVER-$ARCH" --format '{{index .RepoDigests 0}}')
+          docker pull --platform "linux/$ARCH" "$digest"
+          test "$(docker image inspect "$digest" --format '{{.Os}}/{{.Architecture}}')" = "linux/$ARCH"
+          jq -n --arg image "$digest" --arg source "$SOURCE_REVISION" --arg workflow "$GITHUB_SHA" --arg arch "$ARCH" \
+            '{image: $image, source_revision: $source, workflow_revision: $workflow, platform: ("linux/" + $arch), native: true}' \
+            > published.json
+          printf '%s\n' "$digest" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          name: postiz-image-${{ matrix.arch }}
+          path: published.json
+          if-no-files-found: error
 
   build-container-manifest:
+    if: github.event_name != 'pull_request'
     needs: [build-containers, build-containers-common]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ${{ needs.build-containers-common.outputs.image }}
+      CONTAINERVER: ${{ needs.build-containers-common.outputs.containerver }}
+      PUBLISH_LATEST: ${{ needs.build-containers-common.outputs.publish_latest }}
     steps:
       - name: Login to ghcr
         uses: docker/login-action@v3
@@ -70,34 +198,21 @@ jobs:
           password: ${{ github.token }}
 
       - name: Create Docker Manifest
-        env:
-          CONTAINERVER: ${{ needs.build-containers-common.outputs.containerver }}
         run: |
-          # Verify the architecture images
-          echo "Verifying AMD64 image:"
-          docker buildx imagetools inspect ghcr.io/gitroomhq/postiz-app:${{ env.CONTAINERVER }}-amd64
-          
-          echo "Verifying ARM64 image:"
-          docker buildx imagetools inspect ghcr.io/gitroomhq/postiz-app:${{ env.CONTAINERVER }}-arm64
-          
-          # Try to remove any existing manifests first
-          docker manifest rm ghcr.io/gitroomhq/postiz-app:${{ env.CONTAINERVER }} || true
-          docker manifest rm ghcr.io/gitroomhq/postiz-app:latest || true
-          
-          # Create and push the version-specific manifest
-          docker manifest create ghcr.io/gitroomhq/postiz-app:${{ env.CONTAINERVER }} \
-            --amend ghcr.io/gitroomhq/postiz-app:${{ env.CONTAINERVER }}-amd64 \
-            --amend ghcr.io/gitroomhq/postiz-app:${{ env.CONTAINERVER }}-arm64
-
-          docker manifest push ghcr.io/gitroomhq/postiz-app:${{ env.CONTAINERVER }}
-
-          # Create and push the latest manifest
-          docker manifest create ghcr.io/gitroomhq/postiz-app:latest \
-            --amend ghcr.io/gitroomhq/postiz-app:${{ env.CONTAINERVER }}-amd64 \
-            --amend ghcr.io/gitroomhq/postiz-app:${{ env.CONTAINERVER }}-arm64
-
-          docker manifest push ghcr.io/gitroomhq/postiz-app:latest
+          docker buildx imagetools inspect "$IMAGE:$CONTAINERVER-amd64"
+          docker buildx imagetools inspect "$IMAGE:$CONTAINERVER-arm64"
+          docker manifest create "$IMAGE:$CONTAINERVER" \
+            --amend "$IMAGE:$CONTAINERVER-amd64" \
+            --amend "$IMAGE:$CONTAINERVER-arm64"
+          docker manifest push "$IMAGE:$CONTAINERVER"
+          if [ "$PUBLISH_LATEST" = true ]; then
+            docker manifest create "$IMAGE:latest" \
+              --amend "$IMAGE:$CONTAINERVER-amd64" \
+              --amend "$IMAGE:$CONTAINERVER-arm64"
+            docker manifest push "$IMAGE:latest"
+          fi
 
       - name: Verify Manifest
         run: |
-          docker manifest inspect ghcr.io/gitroomhq/postiz-app:latest
+          docker manifest inspect "$IMAGE:$CONTAINERVER" | jq -e '
+            ([.manifests[].platform.architecture] | sort) == ["amd64", "arm64"]'
