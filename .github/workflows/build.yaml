@@ -22,9 +22,8 @@ jobs:
           node-version: ${{ matrix.node-version }}
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v2
+        uses: pnpm/action-setup@v4
         with:
-          version: 8
           run_install: false
 
       - name: Get pnpm store directory
@@ -43,7 +42,10 @@ jobs:
             ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}-
 
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Test backend contracts when supplied by the maintenance source
+        run: pnpm run --if-present test:backend
 
       - name: Build
         run: pnpm run build
