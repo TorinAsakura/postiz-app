@@ -41,7 +41,8 @@
     "docker-build": "./var/docker/docker-build.sh",
     "docker-create": "./var/docker/docker-create.sh",
     "postinstall": "npm run update-plugins && npm run prisma-generate",
-    "test": "jest --coverage --detectOpenHandles --reporters=default --reporters=jest-junit"
+    "test": "jest --coverage --detectOpenHandles --reporters=default --reporters=jest-junit",
+    "test:backend": "jest --config apps/backend/jest.config.cjs --runInBand"
   },
   "dependencies": {
     "@atproto/api": "^0.14.21",

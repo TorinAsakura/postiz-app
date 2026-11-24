@@ -12,6 +12,21 @@ import { SocialAbstract } from '@gitroom/nestjs-libraries/integrations/social.ab
 import { capitalize, chunk } from 'lodash';
 import { Plug } from '@gitroom/helpers/decorators/plug.decorator';
 import { Integration } from '@prisma/client';
+import { HttpException } from '@nestjs/common';
+import { z } from 'zod';
+import { SocialGraph } from './graph';
+import type { SocialComment, SocialConversation } from './conversation';
+
+const threadsNode = z.object({
+  id: z.string(),
+  username: z.string().nullish(),
+  text: z.string().nullish(),
+  timestamp: z.string().nullish(),
+  permalink: z.string().nullish(),
+  replied_to: z.object({ id: z.string() }).optional(),
+  root_post: z.object({ id: z.string() }).optional(),
+  is_reply_owned_by_me: z.boolean().optional(),
+});
 
 export class ThreadsProvider extends SocialAbstract implements SocialProvider {
   identifier = 'threads';
@@ -21,6 +36,7 @@ export class ThreadsProvider extends SocialAbstract implements SocialProvider {
     'threads_basic',
     'threads_content_publish',
     'threads_manage_replies',
+    'threads_read_replies',
     'threads_manage_insights',
   ];
 
@@ -244,7 +260,8 @@ export class ThreadsProvider extends SocialAbstract implements SocialProvider {
     accessToken: string,
     message: string,
     replyToId?: string,
-    quoteId?: string
+    quoteId?: string,
+    singleAttempt = false
   ): Promise<string> {
     const form = new FormData();
     form.append('media_type', 'TEXT');
@@ -259,12 +276,29 @@ export class ThreadsProvider extends SocialAbstract implements SocialProvider {
       form.append('quote_post_id', quoteId);
     }
 
-    const { id: contentId } = await (
-      await this.fetch(`https://graph.threads.net/v1.0/${userId}/threads`, {
-        method: 'POST',
-        body: form,
-      })
-    ).json();
+    const { id: contentId } = singleAttempt
+      ? z
+          .object({ id: z.string().min(1) })
+          .parse(
+            await new SocialGraph(
+              'https://graph.threads.net',
+              accessToken
+            ).request(
+              `/v1.0/${encodeURIComponent(userId)}/threads`,
+              undefined,
+              new URLSearchParams({
+                media_type: 'TEXT',
+                text: message,
+                reply_to_id: replyToId!,
+              })
+            )
+          )
+      : await (
+          await this.fetch(`https://graph.threads.net/v1.0/${userId}/threads`, {
+            method: 'POST',
+            body: form,
+          })
+        ).json();
 
     return contentId;
   }
@@ -410,8 +444,7 @@ export class ThreadsProvider extends SocialAbstract implements SocialProvider {
           {
             id: makeId(10),
             media: [],
-            message:
-              postDetails?.[0]?.settings?.thread_finisher,
+            message: postDetails?.[0]?.settings?.thread_finisher,
             settings: {},
           },
           lastReplyId,
@@ -425,6 +458,122 @@ export class ThreadsProvider extends SocialAbstract implements SocialProvider {
     }
 
     return responses;
+  }
+
+  private async socialIdentity(integration: Integration, graph: SocialGraph) {
+    const actor = z
+      .object({ id: z.string(), username: z.string() })
+      .parse(await graph.request('/v1.0/me', 'id,username'));
+    if (actor.id !== integration.internalId) {
+      throw new HttpException('Threads token belongs to another account', 409);
+    }
+    return { id: actor.id, username: actor.username, name: actor.username };
+  }
+
+  async socialConversation(
+    integration: Integration,
+    postId: string
+  ): Promise<SocialConversation> {
+    const graph = new SocialGraph(
+      'https://graph.threads.net',
+      integration.token
+    );
+    const actor = await this.socialIdentity(integration, graph);
+    const post = threadsNode.parse(
+      await graph.request(
+        `/v1.0/${encodeURIComponent(postId)}`,
+        'id,text,username,timestamp,permalink'
+      )
+    );
+    if (post.id !== postId || post.username !== actor.username) {
+      throw new HttpException(
+        'Threads publication does not belong to this account',
+        409
+      );
+    }
+    const comments = await graph.pages(
+      `/v1.0/${encodeURIComponent(postId)}/conversation?reverse=false`,
+      'id,text,username,timestamp,permalink,replied_to,root_post,is_reply_owned_by_me'
+    );
+    const normalize = (
+      entry: z.infer<typeof threadsNode>,
+      root = false
+    ): SocialComment => {
+      if (!root && (entry.root_post?.id !== postId || !entry.replied_to?.id)) {
+        throw new HttpException(
+          'Threads reply has no verifiable parent publication',
+          502
+        );
+      }
+      return {
+        id: entry.id,
+        rootId: postId,
+        parentId: root ? null : entry.replied_to!.id,
+        text: entry.text || '',
+        author: {
+          id: root || entry.is_reply_owned_by_me ? actor.id : null,
+          username: entry.username || null,
+          name: null,
+        },
+        timestamp: entry.timestamp || null,
+        permalink: entry.permalink || null,
+      };
+    };
+    return {
+      actor,
+      post: normalize(post, true),
+      comments: comments.map((entry) => normalize(threadsNode.parse(entry))),
+    };
+  }
+
+  async socialReply(
+    integration: Integration,
+    commentId: string,
+    message: string
+  ): Promise<string> {
+    const graph = new SocialGraph(
+      'https://graph.threads.net',
+      integration.token
+    );
+    await this.socialIdentity(integration, graph);
+    const contentId = await this.createTextContent(
+      integration.internalId,
+      integration.token,
+      message,
+      commentId,
+      undefined,
+      true
+    );
+    for (let attempt = 0; attempt < 15; attempt++) {
+      const { status } = z
+        .object({ status: z.string() })
+        .parse(
+          await graph.request(
+            `/v1.0/${encodeURIComponent(contentId)}`,
+            'status'
+          )
+        );
+      if (status === 'FINISHED') {
+        const result = z
+          .object({ id: z.string().min(1) })
+          .parse(
+            await graph.request(
+              `/v1.0/${encodeURIComponent(
+                integration.internalId
+              )}/threads_publish`,
+              undefined,
+              new URLSearchParams({ creation_id: contentId })
+            )
+          );
+        return result.id;
+      }
+      if (status === 'ERROR' || status === 'EXPIRED') break;
+      await timer(2000);
+    }
+    throw new HttpException(
+      'Threads reply container is not ready for publication',
+      502
+    );
   }
 
   async analytics(

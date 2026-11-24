@@ -4,6 +4,7 @@ import { MainMcp } from './main.mcp';
 import { IntegrationService } from '@gitroom/nestjs-libraries/database/prisma/integrations/integration.service';
 import { PostsService } from '@gitroom/nestjs-libraries/database/prisma/posts/posts.service';
 import { OpenaiService } from '@gitroom/nestjs-libraries/openai/openai.service';
+import { SocialCommentsService } from '@gitroom/nestjs-libraries/integrations/social.comments.service';
 
 function setup() {
   const integrations = mock<IntegrationService>();
@@ -33,7 +34,7 @@ function setup() {
     posts,
     ai,
     root,
-    mcp: new MainMcp(integrations, posts, ai),
+    mcp: new MainMcp(integrations, posts, ai, mock<SocialCommentsService>()),
   };
 }
 
@@ -194,13 +195,17 @@ describe('Postiz MCP authoring', () => {
   });
 
   it('returns the saved copy and media without exposing integration credentials', async () => {
-    const { mcp, posts } = setup();
+    const { mcp, posts, root } = setup();
+    root.releaseId = 'native-publication';
+    root.releaseURL = 'https://www.threads.net/@selected/post/publication';
     posts.getPost.mockResolvedValue({
       settings: {},
       posts: [{ id: 'root', content: 'Saved text', image: [] }],
     } as Awaited<ReturnType<PostsService['getPost']>>);
     const result = await mcp.getPost('org', { postId: 'root' });
     expect(JSON.parse(result[0].text).posts[0].text).toBe('Saved text');
+    expect(JSON.parse(result[0].text).releaseId).toBe('native-publication');
+    expect(JSON.parse(result[0].text).releaseURL).toBe(root.releaseURL);
     expect(result[0].text).not.toContain('must-not-leak');
   });
 });

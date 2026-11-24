@@ -162,6 +162,7 @@ export class PostsRepository {
         id: true,
         content: true,
         publishDate: true,
+        releaseId: true,
         releaseURL: true,
         submittedForOrganizationId: true,
         submittedForOrderId: true,
