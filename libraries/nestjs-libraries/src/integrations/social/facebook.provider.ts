@@ -8,6 +8,21 @@ import {
 import { makeId } from '@gitroom/nestjs-libraries/services/make.is';
 import dayjs from 'dayjs';
 import { SocialAbstract } from '@gitroom/nestjs-libraries/integrations/social.abstract';
+import { Integration } from '@prisma/client';
+import { HttpException } from '@nestjs/common';
+import { z } from 'zod';
+import { META_GRAPH_VERSION, SocialGraph } from './graph';
+import type { SocialConversation } from './conversation';
+
+const facebookAuthor = z.object({ id: z.string(), name: z.string().nullish() });
+const facebookComment = z.object({
+  id: z.string(),
+  message: z.string().nullish(),
+  from: facebookAuthor.nullish(),
+  created_time: z.string().nullish(),
+  parent: z.object({ id: z.string() }).nullish(),
+  permalink_url: z.string().nullish(),
+});
 
 export class FacebookProvider extends SocialAbstract implements SocialProvider {
   identifier = 'facebook';
@@ -19,8 +34,100 @@ export class FacebookProvider extends SocialAbstract implements SocialProvider {
     'pages_manage_posts',
     'pages_manage_engagement',
     'pages_read_engagement',
+    'pages_read_user_content',
     'read_insights',
   ];
+
+  private socialGraph(integration: Integration) {
+    return new SocialGraph('https://graph.facebook.com', integration.token);
+  }
+
+  private async socialIdentity(integration: Integration, graph: SocialGraph) {
+    const page = facebookAuthor.parse(
+      await graph.request('/' + META_GRAPH_VERSION + '/me', 'id,name')
+    );
+    if (page.id !== integration.internalId)
+      throw new HttpException(
+        'Facebook token is not for the selected Page',
+        409
+      );
+    return { id: page.id, username: null, name: page.name || null };
+  }
+
+  async socialConversation(
+    integration: Integration,
+    postId: string
+  ): Promise<SocialConversation> {
+    const graph = this.socialGraph(integration);
+    const actor = await this.socialIdentity(integration, graph);
+    const path = '/' + META_GRAPH_VERSION + '/' + encodeURIComponent(postId);
+    const post = facebookComment.parse(
+      await graph.request(
+        path,
+        'id,message,from{id,name},created_time,permalink_url'
+      )
+    );
+    if (post.id !== postId || post.from?.id !== actor.id)
+      throw new HttpException(
+        'Facebook post does not belong to this Page',
+        409
+      );
+    // The stream filter includes every comment level; parent IDs retain the tree.
+    const entries = await graph.pages(
+      path + '/comments?filter=stream',
+      'id,message,from{id,name},created_time,parent{id},permalink_url'
+    );
+    const normalize = (
+      entry: z.infer<typeof facebookComment>,
+      parentId: string | null
+    ) => ({
+      id: entry.id,
+      parentId,
+      rootId: postId,
+      text: entry.message || '',
+      author: {
+        id: entry.from?.id || null,
+        username: null,
+        name: entry.from?.name || null,
+      },
+      timestamp: entry.created_time || null,
+      permalink: entry.permalink_url || null,
+    });
+    const comments = new Map(
+      entries.map((raw) => {
+        const entry = facebookComment.parse(raw);
+        return [entry.id, normalize(entry, entry.parent?.id || postId)];
+      })
+    );
+    return {
+      actor,
+      post: normalize(post, null),
+      comments: Array.from(comments.values()),
+    };
+  }
+
+  async socialReply(
+    integration: Integration,
+    commentId: string,
+    message: string
+  ): Promise<string> {
+    const graph = this.socialGraph(integration);
+    await this.socialIdentity(integration, graph);
+    const result = z
+      .object({ id: z.string().min(1) })
+      .parse(
+        await graph.request(
+          '/' +
+            META_GRAPH_VERSION +
+            '/' +
+            encodeURIComponent(commentId) +
+            '/comments',
+          undefined,
+          new URLSearchParams({ message })
+        )
+      );
+    return result.id;
+  }
   async refreshToken(refresh_token: string): Promise<AuthTokenDetails> {
     return {
       refreshToken: '',

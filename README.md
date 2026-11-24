@@ -102,8 +102,8 @@ To have the project up and running, please follow the [Quick Start Guide](https:
 ## Maintenance API: social comments
 
 The maintenance fork exposes incoming social conversations separately from
-Postiz's internal collaboration comments. Threads is the first supported
-provider; Instagram with Facebook Login also supports these operations.
+Postiz's internal collaboration comments. Threads, Instagram with Facebook
+Login and Facebook Pages support these operations.
 Existing publishing and scheduled thread operations are unchanged.
 
 - `POSTIZ_PROVIDERS_LIST` returns `accountId`, the native account identity
@@ -122,6 +122,9 @@ Replying also requires `commentId`, `message` and a stable `requestId`.
 The account must own the publication, and the comment must be in its conversation.
 The Threads connection needs `threads_read_replies`; existing tokens need a
 normal reconnection to obtain newly requested permissions.
+Instagram requires `instagram_manage_comments` on its linked account; Facebook
+requires a Page token with `pages_manage_engagement` and the applicable Page
+reading permissions. Facebook reads all comment levels with `filter=stream`.
 
 Reuse the same request ID and exact payload after interruption. A different
 payload for that ID is rejected. Claims and native reply IDs are retained in
