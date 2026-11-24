@@ -85,7 +85,7 @@ export class SocialCommentsService {
     const provider = this.manager.getSocialIntegration(
       integration.providerIdentifier
     );
-    if (!provider.socialConversation || !provider.socialReply) {
+    if (!provider || !provider.socialConversation || !provider.socialReply) {
       throw new HttpException(
         'Social comments are not supported for this channel',
         400

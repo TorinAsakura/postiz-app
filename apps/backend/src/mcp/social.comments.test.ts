@@ -91,6 +91,7 @@ function setup() {
   return {
     integrations,
     operations,
+    manager,
     provider,
     operation,
     service: new SocialCommentsService(integrations, operations, manager),
@@ -98,6 +99,16 @@ function setup() {
 }
 
 describe('social comment operations', () => {
+  it('rejects an unsupported channel without calling a social provider', async () => {
+    const { service, manager, provider } = setup();
+    manager.getSocialIntegration.mockReturnValue(undefined);
+    const { commentId, message, requestId, ...query } = input;
+    await expect(service.conversation('org', query)).rejects.toThrow(
+      'not supported'
+    );
+    expect(provider.socialConversation).not.toHaveBeenCalled();
+  });
+
   it('returns a conversation without credentials', async () => {
     const { service, integrations } = setup();
     const { commentId, message, requestId, ...query } = input;
