@@ -4,6 +4,7 @@ import { MainMcp } from './main.mcp';
 import { IntegrationService } from '@gitroom/nestjs-libraries/database/prisma/integrations/integration.service';
 import { PostsService } from '@gitroom/nestjs-libraries/database/prisma/posts/posts.service';
 import { OpenaiService } from '@gitroom/nestjs-libraries/openai/openai.service';
+import { SocialCommentsService } from '@gitroom/nestjs-libraries/integrations/social.comments.service';
 
 function setup() {
   const integrations = mock<IntegrationService>();
@@ -33,7 +34,7 @@ function setup() {
     posts,
     ai,
     root,
-    mcp: new MainMcp(integrations, posts, ai),
+    mcp: new MainMcp(integrations, posts, ai, mock<SocialCommentsService>()),
   };
 }
 

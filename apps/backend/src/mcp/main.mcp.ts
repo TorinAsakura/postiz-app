@@ -5,6 +5,15 @@ import { string, array, enum as eenum, object, boolean, number } from 'zod';
 import { PostsService } from '@gitroom/nestjs-libraries/database/prisma/posts/posts.service';
 import { makeId } from '@gitroom/nestjs-libraries/services/make.is';
 import dayjs from 'dayjs';
+import {
+  SocialCommentsService,
+  conversationRequest,
+  replyRequest,
+} from '@gitroom/nestjs-libraries/integrations/social.comments.service';
+import type {
+  ConversationRequest,
+  ReplyRequest,
+} from '@gitroom/nestjs-libraries/integrations/social/conversation';
 import { OpenaiService } from '@gitroom/nestjs-libraries/openai/openai.service';
 import {
   EmptySettings,
@@ -16,7 +25,8 @@ export class MainMcp {
   constructor(
     private _integrationService: IntegrationService,
     private _postsService: PostsService,
-    private _openAiService: OpenaiService
+    private _openAiService: OpenaiService,
+    private _socialComments: SocialCommentsService
   ) {}
 
   @McpTool({ toolName: 'POSTIZ_GET_CONFIG_ID' })
@@ -35,6 +45,7 @@ export class MainMcp {
       await this._integrationService.getIntegrationsList(organization)
     ).map((org) => ({
       id: org.id,
+      accountId: org.internalId,
       name: org.name,
       identifier: org.providerIdentifier,
       picture: org.picture,
@@ -45,6 +56,39 @@ export class MainMcp {
         : undefined,
     }));
     return [{ type: 'text', text: JSON.stringify(list) }];
+  }
+
+  @McpTool({
+    toolName: 'POSTIZ_READ_SOCIAL_CONVERSATION',
+    zod: conversationRequest.shape,
+  })
+  async readSocialConversation(
+    organization: string,
+    input: ConversationRequest
+  ) {
+    return [
+      {
+        type: 'text',
+        text: JSON.stringify(
+          await this._socialComments.conversation(organization, input)
+        ),
+      },
+    ];
+  }
+
+  @McpTool({
+    toolName: 'POSTIZ_REPLY_TO_SOCIAL_COMMENT',
+    zod: replyRequest.shape,
+  })
+  async replyToSocialComment(organization: string, input: ReplyRequest) {
+    return [
+      {
+        type: 'text',
+        text: JSON.stringify(
+          await this._socialComments.reply(organization, input)
+        ),
+      },
+    ];
   }
 
   @McpTool({

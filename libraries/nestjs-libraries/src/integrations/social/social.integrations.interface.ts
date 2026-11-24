@@ -1,4 +1,5 @@
 import { Integration } from '@prisma/client';
+import type { SocialConversation } from './conversation';
 
 export interface ClientInformation {
   client_id: string;
@@ -71,6 +72,15 @@ export type AuthTokenDetails = {
 };
 
 export interface ISocialMediaIntegration {
+  socialConversation?(
+    integration: Integration,
+    postId: string
+  ): Promise<SocialConversation>;
+  socialReply?(
+    integration: Integration,
+    commentId: string,
+    message: string
+  ): Promise<string>;
   post(
     id: string,
     accessToken: string,

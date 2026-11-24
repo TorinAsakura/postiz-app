@@ -99,6 +99,42 @@
 
 To have the project up and running, please follow the [Quick Start Guide](https://docs.postiz.com/quickstart)
 
+## Maintenance API: social comments
+
+The maintenance fork exposes incoming social conversations separately from
+Postiz's internal collaboration comments. Threads is the first supported
+provider. Existing publishing and scheduled thread operations are unchanged.
+
+- `POSTIZ_PROVIDERS_LIST` returns `accountId`, the native account identity
+- `POSTIZ_READ_SOCIAL_CONVERSATION` reads the root post and all available reply
+  pages, retaining native IDs, parent IDs, author information and timestamps
+- `POSTIZ_REPLY_TO_SOCIAL_COMMENT` sends a text reply to an exact native comment
+  from an explicitly selected integration and account
+- The equivalent authenticated API routes are
+  `GET /public/v1/social-comments/conversation` and
+  `POST /public/v1/social-comments/reply`
+
+Reading requires `integrationId`, `expectedActorId` and the native `postId`.
+Replying also requires `commentId`, `message` and a stable `requestId`.
+The account must own the publication, and the comment must be in its conversation.
+The Threads connection needs `threads_read_replies`; existing tokens need a
+normal reconnection to obtain newly requested permissions.
+
+Reuse the same request ID and exact payload after interruption. A different
+payload for that ID is rejected. Claims and native reply IDs are retained in
+the existing PostgreSQL database, not an expiring cache. The result distinguishes
+`pending`, `unknown`, `published` and `confirmed`. Only `confirmed` means that
+the native reply was read back under the exact parent and account. A repeated
+operation never sends again. An unknown outcome without a native ID requires
+inspection of the conversation, not a fresh request ID to bypass protection.
+
+Permalinks are returned only when provided by the social API; a missing comment
+permalink is `null`, not a fabricated URL or a relabelled root-post link.
+No polling inbox, automatic social replies or public test messages are enabled.
+
+Run `pnpm test:backend` for the backend/provider regression tests and
+`pnpm build:backend` for the production compiler configuration.
+
 ## Invest in the Postiz Coin :)
 
 DMsTbeCfX1crgAse5tver98KAMarPWeP3d6U3Gmmpump
