@@ -280,6 +280,8 @@ export class MainMcp {
           id: root.id,
           state: root.state,
           providerId: root.integrationId,
+          releaseId: root.releaseId ?? null,
+          releaseURL: root.releaseURL ?? null,
           date: root.publishDate,
           group: root.group,
           settings: group.settings,

@@ -115,6 +115,8 @@ provider. Existing publishing and scheduled thread operations are unchanged.
   `POST /public/v1/social-comments/reply`
 
 Reading requires `integrationId`, `expectedActorId` and the native `postId`.
+For a publication saved in Postiz, use `POSTIZ_LIST_POSTS` or `POSTIZ_GET_POST`
+to obtain its native `releaseId`; pass that value as the conversation's `postId`.
 Replying also requires `commentId`, `message` and a stable `requestId`.
 The account must own the publication, and the comment must be in its conversation.
 The Threads connection needs `threads_read_replies`; existing tokens need a
