@@ -1,6 +1,8 @@
 import { HttpException } from '@nestjs/common';
 import { z } from 'zod';
 
+export const META_GRAPH_VERSION = 'v27.0';
+
 const pageSchema = z.object({
   data: z.array(z.record(z.unknown())),
   paging: z

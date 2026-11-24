@@ -103,7 +103,8 @@ To have the project up and running, please follow the [Quick Start Guide](https:
 
 The maintenance fork exposes incoming social conversations separately from
 Postiz's internal collaboration comments. Threads is the first supported
-provider. Existing publishing and scheduled thread operations are unchanged.
+provider; Instagram with Facebook Login also supports these operations.
+Existing publishing and scheduled thread operations are unchanged.
 
 - `POSTIZ_PROVIDERS_LIST` returns `accountId`, the native account identity
 - `POSTIZ_READ_SOCIAL_CONVERSATION` reads the root post and all available reply
