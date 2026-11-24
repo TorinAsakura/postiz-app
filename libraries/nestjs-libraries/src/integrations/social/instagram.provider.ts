@@ -11,6 +11,21 @@ import dayjs from 'dayjs';
 import { SocialAbstract } from '@gitroom/nestjs-libraries/integrations/social.abstract';
 import { InstagramDto } from '@gitroom/nestjs-libraries/dtos/posts/providers-settings/instagram.dto';
 import { Integration } from '@prisma/client';
+import { HttpException } from '@nestjs/common';
+import { z } from 'zod';
+import { META_GRAPH_VERSION, SocialGraph } from './graph';
+import type { SocialComment, SocialConversation } from './conversation';
+
+const instagramComment = z.object({
+  id: z.string(),
+  text: z.string().nullish(),
+  username: z.string().nullish(),
+  timestamp: z.string().nullish(),
+  parent_id: z.string().nullish(),
+  from: z
+    .object({ id: z.string().optional(), username: z.string().optional() })
+    .nullish(),
+});
 
 export class InstagramProvider
   extends SocialAbstract
@@ -40,6 +55,135 @@ export class InstagramProvider
       picture: '',
       username: '',
     };
+  }
+
+  private socialGraph(integration: Integration) {
+    return new SocialGraph(
+      'https://graph.facebook.com',
+      integration.token.split('___')[0]
+    );
+  }
+
+  private async socialIdentity(integration: Integration, graph: SocialGraph) {
+    const page = z
+      .object({
+        id: z.string(),
+        instagram_business_account: z
+          .object({
+            id: z.string(),
+            username: z.string(),
+          })
+          .optional(),
+      })
+      .parse(
+        await graph.request(
+          '/' + META_GRAPH_VERSION + '/me',
+          'id,instagram_business_account{id,username}'
+        )
+      );
+    const actor = page.instagram_business_account;
+    if (!actor || actor.id !== integration.internalId)
+      throw new HttpException(
+        'Facebook token is not linked to the selected Instagram account',
+        409
+      );
+    return { id: actor.id, username: actor.username, name: actor.username };
+  }
+
+  async socialConversation(
+    integration: Integration,
+    postId: string
+  ): Promise<SocialConversation> {
+    const graph = this.socialGraph(integration);
+    const actor = await this.socialIdentity(integration, graph);
+    const path = '/' + META_GRAPH_VERSION + '/' + encodeURIComponent(postId);
+    const media = z
+      .object({
+        id: z.string(),
+        owner: z.object({ id: z.string() }),
+        caption: z.string().nullish(),
+        timestamp: z.string().nullish(),
+        permalink: z.string().nullish(),
+      })
+      .parse(await graph.request(path, 'id,owner,caption,timestamp,permalink'));
+    if (media.id !== postId || media.owner.id !== actor.id)
+      throw new HttpException(
+        'Instagram media does not belong to this account',
+        409
+      );
+    const fields = 'id,text,username,from,timestamp,parent_id';
+    const top = await graph.pages(path + '/comments', fields);
+    const comments = new Map<string, SocialComment>();
+    const normalize = (raw: unknown, expectedParent: string): SocialComment => {
+      const entry = instagramComment.parse(raw);
+      const username = entry.from?.username || entry.username || null;
+      return {
+        id: entry.id,
+        rootId: postId,
+        parentId: entry.parent_id || expectedParent,
+        text: entry.text || '',
+        timestamp: entry.timestamp || null,
+        permalink: null,
+        author: {
+          id: entry.from?.id || (username === actor.username ? actor.id : null),
+          username,
+          name: null,
+        },
+      };
+    };
+    for (const entry of top) {
+      const comment = normalize(entry, postId);
+      comments.set(comment.id, comment);
+      if (comment.parentId !== postId) continue;
+      const replies = await graph.pages(
+        '/' +
+          META_GRAPH_VERSION +
+          '/' +
+          encodeURIComponent(comment.id) +
+          '/replies',
+        fields
+      );
+      for (const reply of replies) {
+        const child = normalize(reply, comment.id);
+        comments.set(child.id, child);
+      }
+    }
+    return {
+      actor,
+      post: {
+        id: media.id,
+        rootId: postId,
+        parentId: null,
+        text: media.caption || '',
+        author: { id: actor.id, username: actor.username, name: null },
+        timestamp: media.timestamp || null,
+        permalink: media.permalink || null,
+      },
+      comments: Array.from(comments.values()),
+    };
+  }
+
+  async socialReply(
+    integration: Integration,
+    commentId: string,
+    message: string
+  ): Promise<string> {
+    const graph = this.socialGraph(integration);
+    await this.socialIdentity(integration, graph);
+    const result = z
+      .object({ id: z.string().min(1) })
+      .parse(
+        await graph.request(
+          '/' +
+            META_GRAPH_VERSION +
+            '/' +
+            encodeURIComponent(commentId) +
+            '/replies',
+          undefined,
+          new URLSearchParams({ message })
+        )
+      );
+    return result.id;
   }
 
   async reConnect(
