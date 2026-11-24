@@ -134,6 +134,11 @@ Permalinks are returned only when provided by the social API; a missing comment
 permalink is `null`, not a fabricated URL or a relabelled root-post link.
 No polling inbox, automatic social replies or public test messages are enabled.
 
+MCP uses the installed SDK's SSE sessions. Clients must follow the `endpoint`
+event, including its opaque `sessionId`, rather than hardcode the messages URL.
+Each session retains its own SDK server and response stream; closing one client
+does not remove another client's listeners or mix their JSON-RPC responses.
+
 Run `pnpm test:backend` for the backend/provider regression tests and
 `pnpm build:backend` for the production compiler configuration.
 
